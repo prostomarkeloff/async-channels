@@ -10,9 +10,8 @@ channel = Channel[int]()
 async def listener_printer(event: int):
     print(event)
 
-async def sender(channel: Channel[int]):
+async def main():
     await channel.send_all(5)
 
-async def main():
-    await sender(channel)
+asyncio.run(main())
 ```

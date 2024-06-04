@@ -15,7 +15,7 @@ asyncio.create_task(sender(ch))
 while True:
     await asyncio.sleep(0)
 """
-
+import asyncio
 import typing
 
 EventT = typing.TypeVar("EventT")
@@ -38,9 +38,17 @@ class Channel(typing.Generic[EventT]):
     def add_listener(self, listener: ListenerT, name: str):
         self._listeners[name] = listener
 
-    async def send_all(self, event: EventT):
-        for _, listener in self._listeners.items():
-            await listener(event)
+    async def send_all(self, event: EventT, wait_till_complete: bool = False):
+        if wait_till_complete:
+            tasks = [asyncio.create_task(listener(event)) for _, listener in self._listeners.items()]
+            await asyncio.wait(tasks)
+        else:
+            for _, listener in self._listeners.items():
+                await listener(event)
 
-    async def send_to(self, event: EventT, name: str):
-        await self._listeners[name](event)
+    async def send_to(self, event: EventT, name: str, wait_till_complete: bool = False):
+        if wait_till_complete:
+            await asyncio.wait([asyncio.create_task(self._listeners[name](event))])
+        else:
+            _ = asyncio.create_task(self._listeners[name](event))
+
