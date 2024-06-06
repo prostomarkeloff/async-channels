@@ -6,8 +6,11 @@ authors = ["prostomarkeloff <28061158+prostomarkeloff@users.noreply.github.com>"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = "^3.8"
 
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.10.0"
 
 [build-system]
 requires = ["poetry-core"]

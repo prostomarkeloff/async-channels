@@ -24,10 +24,10 @@ ListenerT = typing.Callable[[EventT], typing.Awaitable[None]]
 
 class Channel(typing.Generic[EventT]):
     def __init__(self):
-        self._listeners: typing.Dict[str, ListenerT] = {}
+        self._listeners: typing.Dict[str, ListenerT[EventT]] = {}
 
     def listener(self, name: typing.Union[str, None] = None):
-        def wrapper(coro: ListenerT):
+        def wrapper(coro: ListenerT[EventT]):
             async def inner(event: EventT):
                 return await coro(event)
 
@@ -35,8 +35,8 @@ class Channel(typing.Generic[EventT]):
             return inner
         return wrapper
 
-    def add_listener(self, listener: ListenerT, name: str):
-        self._listeners[name] = listener
+    def add_listener(self, listener: ListenerT[EventT], name: typing.Union[None, str] = None):
+        self._listeners[name or listener.__name__] = listener
 
     async def send_all(self, event: EventT, wait_till_complete: bool = False):
         if wait_till_complete:
