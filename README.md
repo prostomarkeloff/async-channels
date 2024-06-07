@@ -2,16 +2,17 @@ Asynchronous event-driven channeling for fun
 
 ```python
 import asyncio
-from async_channels import Channel
+from async_channels import MPSCChannel
 
-channel = Channel[int]()
+channel = MPSCChannel[int]()
 
-@channel.listener()
-async def listener_printer(event: int):
+@channel.consumer
+async def consumer_printer(event: int):
     print(event)
 
 async def main():
-    await channel.send_all(5)
+    await channel.send(5)
+    await channel.run_consumer()
 
 asyncio.run(main())
 ```
