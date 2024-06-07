@@ -1,54 +1,150 @@
 """
 Asynchronous event-driven channeling for fun
-
-async def listener_printer(event: MyEvent):
-    print(event.value)
-
-async def sender(ch: Channel[MyEvent]):
-    while True:
-        ch.send_all(MyEvent(value=5))
-        await asyncio.sleep(3)
-
-ch = Channel[MyEvent]()
-ch.add_listener(listener_printer, name="printer")
-asyncio.create_task(sender(ch))
-while True:
-    await asyncio.sleep(0)
 """
 import asyncio
 import typing
+import dataclasses
 
 EventT = typing.TypeVar("EventT")
-ListenerT = typing.Callable[[EventT], typing.Awaitable[None]]
+ConsumerT = typing.Callable[[EventT], typing.Awaitable[None]]
 
 
-class Channel(typing.Generic[EventT]):
-    def __init__(self):
-        self._listeners: typing.Dict[str, ListenerT[EventT]] = {}
+class _InternalEvent(typing.Generic[EventT]):
+    def __init__(self, events: typing.List[EventT], wait: bool):
+        self.completed = not wait
+        self.events = events
 
-    def listener(self, name: typing.Union[str, None] = None):
-        def wrapper(coro: ListenerT[EventT]):
-            async def inner(event: EventT):
-                return await coro(event)
+    def __iter__(self):
+        return self
 
-            self.add_listener(inner, name or coro.__name__)
-            return inner
-        return wrapper
+    def __next__(self):
+        while self.events:
+            return self.events.pop(0)
+        raise StopIteration()
 
-    def add_listener(self, listener: ListenerT[EventT], name: typing.Union[None, str] = None):
-        self._listeners[name or listener.__name__] = listener
+    async def wait(self):
+        while not self.completed:
+            await asyncio.sleep(0)
+        return
 
-    async def send_all(self, event: EventT, wait_till_complete: bool = False):
+
+@dataclasses.dataclass
+class ListeningSettings:
+    forever: bool = True
+    ticks: int = -1  # ticks = -1 means that it could be listened forever
+
+    def __post_init__(self):
+        if self.forever and self.ticks > -1: raise ValueError("Eternity couldn't be ticked")
+        if self.ticks == 0: raise ValueError("Ticks == 0 means nothing (no listening at all)")
+        if not self.forever and self.ticks < 1: raise ValueError(
+            "Forever = False and ticks < 1 means nothing (no listening at all)")
+
+
+class MPSCChannel(typing.Generic[EventT]):
+    def __init__(self, consumer: typing.Union[ConsumerT, None] = None):
+        self._consuming_lock = asyncio.Lock()
+        self._consumer = consumer
+        self._events: typing.List[_InternalEvent[EventT]] = []
+        self._current_task: typing.Union[asyncio.Task, None] = None
+
+    def consumer(self, coro: ConsumerT):
+        self._consumer = coro
+
+        async def coro(event: EventT):
+            return await coro(event)
+
+        return coro
+
+    async def send(self, *events: EventT, wait_till_complete: bool = False):
+        event = _InternalEvent(list(events), wait_till_complete)
+        self._events.append(event)
         if wait_till_complete:
-            tasks = [asyncio.create_task(listener(event)) for _, listener in self._listeners.items()]
-            await asyncio.wait(tasks)
-        else:
-            for _, listener in self._listeners.items():
-                await listener(event)
+            await event.wait()
+        return
 
-    async def send_to(self, event: EventT, name: str, wait_till_complete: bool = False):
-        if wait_till_complete:
-            await asyncio.wait([asyncio.create_task(self._listeners[name](event))])
+    async def _consumer_runner(self, settings: ListeningSettings):
+        if settings.forever:
+            while self._consuming_lock.locked():
+                if self._events:
+                    internal_event = self._events.pop(0)
+                    for event in internal_event:
+                        await self._consumer(event)
+                    internal_event.completed = True
+                else:
+                    await asyncio.sleep(0)
+            else:
+                return
         else:
-            _ = asyncio.create_task(self._listeners[name](event))
+            while self._consuming_lock.locked():
+                while settings.ticks > 0:
+                    if self._events:
+                        internal_event = self._events.pop(0)
+                        for event in internal_event:
+                            await self._consumer(event)
+                        internal_event.completed = True
+                        settings.ticks -= 1
+                    else:
+                        await asyncio.sleep(0)
+                else:
+                    self._consuming_lock.release()
+                    return await self.stop_consumer()
+            else:
+                return
 
+    async def run_consumer(self, settings: typing.Union[ListeningSettings, None] = None):
+        if not self._consumer: raise RuntimeError("Consumer is not set")
+        if settings is None: settings = ListeningSettings()
+        if self._consuming_lock.locked():
+            raise RuntimeError("This channel is already listened to")
+
+        await self._consuming_lock.acquire()
+        runner = asyncio.create_task(self._consumer_runner(settings))
+        self._current_task = runner
+
+    async def stop_consumer(self):
+        while self._events:
+            await asyncio.sleep(0)
+        self._current_task.cancel()
+        self._consuming_lock.release()
+
+    async def listen_to(self, settings: typing.Union[ListeningSettings, None] = None):
+        if settings is None: settings = ListeningSettings(True, 0)
+        if not self._current_task.done():
+            await asyncio.sleep(0)
+        if self._consuming_lock.locked():
+            raise RuntimeError("This channel is already listened to")
+
+        await self._consuming_lock.acquire()
+        if settings.forever:
+            while self._consuming_lock.locked():
+                if self._events:
+                    internal_event = self._events.pop(0)
+                    for event in internal_event:
+                        yield event
+                    internal_event.completed = True
+                else:
+                    await asyncio.sleep(0)
+            else:
+                return
+        else:
+            while self._consuming_lock.locked():
+                while settings.ticks > 0:
+                    if self._events:
+                        internal_event = self._events.pop(0)
+                        for event in internal_event:
+                            yield event
+                        internal_event.completed = True
+                        settings.ticks -= 1
+                    else:
+                        await asyncio.sleep(0)
+                else:
+                    self._consuming_lock.release()
+                    break
+            else:
+                return
+
+
+__all__ = (
+    "ListeningSettings",
+    "MPSCChannel"
+)

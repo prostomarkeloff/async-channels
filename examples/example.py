@@ -1,33 +1,29 @@
+from async_channels import MPSCChannel, ListeningSettings
 import asyncio
-from async_channels import Channel
 
-channel = Channel[int]()
+channel = MPSCChannel[str]()
 
-
-# use decorator; you could also add name as an argument
-@channel.listener()
-async def listener_printer(event: int):
-    print(event)
-
-
-async def listener_adding_printer(event: int):
-    print(event + 1)
-
-
-@channel.listener("awaiter")
-async def listener_print_after(event: int):
-    print(event + 10)
-    await asyncio.sleep(10)
+@channel.consumer
+async def default_consumer(event: str):
+    print("Default consumer got ", event)
 
 
 async def main():
-    # add with method
-    channel.add_listener(listener_adding_printer, "adder")
-    await channel.send_to(5, "listener_printer")
-    await channel.send_to(5, "adder")
-    # code below won't run till sending (and listening inside) won't be complete
-    await channel.send_to(5, "awaiter", wait_till_complete=True)
-    await channel.send_all(5)
+    await channel.run_consumer()
+    # next event won't be sent till this isn't consumed
+    await channel.send("hello world", wait_till_complete=True)
+    await channel.send("goodbye")
+    await channel.stop_consumer()
 
+    # only two events will be consumed
+    await channel.run_consumer(ListeningSettings(forever=False, ticks=2))
+    await channel.send("hello2")
+    await channel.send("bye")
+
+    # events sent this way will be grouped to one event
+    await channel.send("won't", "be get right now")
+    await channel.send("never listened to")
+    async for event in channel.listen_to(ListeningSettings(forever=False, ticks=1)):
+        print("Listened to ", event)
 
 asyncio.run(main())
