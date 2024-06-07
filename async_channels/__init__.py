@@ -104,12 +104,13 @@ class MPSCChannel(typing.Generic[EventT]):
     async def stop_consumer(self):
         while self._events:
             await asyncio.sleep(0)
+        if not self._consuming_lock.locked(): raise RuntimeError("No consumer is running")
         self._current_task.cancel()
         self._consuming_lock.release()
 
     async def listen_to(self, settings: typing.Union[ListeningSettings, None] = None):
         if settings is None: settings = ListeningSettings(True, 0)
-        if not self._current_task.done():
+        if self._current_task and not self._current_task.done():
             await asyncio.sleep(0)
         if self._consuming_lock.locked():
             raise RuntimeError("This channel is already listened to")
