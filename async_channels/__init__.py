@@ -10,9 +10,11 @@ ConsumerT = typing.Callable[[EventT], typing.Awaitable[None]]
 
 
 class _InternalEvent(typing.Generic[EventT]):
-    def __init__(self, events: typing.List[EventT], wait: bool):
+    def __init__(self, events: typing.List[EventT], wait: bool, timeout: int):
         self.completed = not wait
         self.events = events
+        self.timeout = timeout # -1 means there is no timeout (we can wait forever)
+
 
     def __iter__(self):
         return self
@@ -23,8 +25,14 @@ class _InternalEvent(typing.Generic[EventT]):
         raise StopIteration()
 
     async def wait(self):
-        while not self.completed:
+        while not self.completed and self.timeout == -1:
             await asyncio.sleep(0)
+        while not self.completed and self.timeout > 0:
+            self.timeout -= 1
+            await asyncio.sleep(1)
+        if self.timeout == 0:
+            self.completed = True # cancellation
+            raise asyncio.TimeoutError()
         return
 
 
@@ -55,8 +63,9 @@ class MPSCChannel(typing.Generic[EventT]):
 
         return coro
 
-    async def send(self, *events: EventT, wait_till_complete: bool = False):
-        event = _InternalEvent(list(events), wait_till_complete)
+    async def send(self, *events: EventT, wait_till_complete: bool = False, timeout: int = -1):
+        if not wait_till_complete and timeout > 0: raise ValueError("Timeouts can't be used without waiting to complete")
+        event = _InternalEvent(list(events), wait_till_complete, timeout)
         self._events.append(event)
         if wait_till_complete:
             await event.wait()
@@ -87,7 +96,7 @@ class MPSCChannel(typing.Generic[EventT]):
                         await asyncio.sleep(0)
                 else:
                     self._consuming_lock.release()
-                    return await self.stop_consumer()
+                    return await self._stop_consumer_inner()
             else:
                 return
 
@@ -101,12 +110,14 @@ class MPSCChannel(typing.Generic[EventT]):
         runner = asyncio.create_task(self._consumer_runner(settings))
         self._current_task = runner
 
-    async def stop_consumer(self):
+    async def _stop_consumer_inner(self):
         while self._events:
             await asyncio.sleep(0)
-        if not self._consuming_lock.locked(): raise RuntimeError("No consumer is running")
         self._current_task.cancel()
         self._consuming_lock.release()
+    async def stop_consumer(self):
+        if not self._consuming_lock.locked(): raise RuntimeError("No consumer is running")
+        await self._stop_consumer_inner()
 
     async def listen_to(self, settings: typing.Union[ListeningSettings, None] = None):
         if settings is None: settings = ListeningSettings(True, 0)
