@@ -76,6 +76,7 @@ class MPSCChannel(typing.Generic[EventT]):
             while self._consuming_lock.locked():
                 if self._events:
                     internal_event = self._events.pop(0)
+                    if internal_event.completed: continue
                     for event in internal_event:
                         await self._consumer(event)
                     internal_event.completed = True
@@ -88,6 +89,7 @@ class MPSCChannel(typing.Generic[EventT]):
                 while settings.ticks > 0:
                     if self._events:
                         internal_event = self._events.pop(0)
+                        if internal_event.completed: continue
                         for event in internal_event:
                             await self._consumer(event)
                         internal_event.completed = True
@@ -131,6 +133,7 @@ class MPSCChannel(typing.Generic[EventT]):
             while self._consuming_lock.locked():
                 if self._events:
                     internal_event = self._events.pop(0)
+                    if internal_event.completed: continue
                     for event in internal_event:
                         yield event
                     internal_event.completed = True
@@ -143,6 +146,7 @@ class MPSCChannel(typing.Generic[EventT]):
                 while settings.ticks > 0:
                     if self._events:
                         internal_event = self._events.pop(0)
+                        if internal_event.completed: continue
                         for event in internal_event:
                             yield event
                         internal_event.completed = True
